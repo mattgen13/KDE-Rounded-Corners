@@ -108,7 +108,7 @@ vec4 shapeCorner(vec2 coord0, vec4 tex, vec2 start, float angle, vec4 coord_shad
     return mix(coord_shadowColor, tex, antialiasing);
 }
 
-vec4 run(vec2 texcoord0, vec4 tex)
+vec4 run_internal(vec2 texcoord0, vec4 tex)
 {
     if (tex.a == 0.0) {
         return tex;
@@ -160,4 +160,231 @@ vec4 run(vec2 texcoord0, vec4 tex)
         // For section x, the tex is not changing
     }
     return tex;
+}
+
+vec3 closestPointOnLine3D(vec3 _lineStart, vec3 _lineEnd, vec3 _pos, float _offset, out float o_lerp, out float o_lerpUnclamped)
+{
+	vec3 diff = _lineEnd - _lineStart;
+	float lineLength = length(diff);
+	//vec3 dir = diff / lineLength;
+    vec3 dir = diff * (1.0 / lineLength);
+
+	vec3 posDiff = _pos - _lineStart;
+	float comp = dot(posDiff, dir);
+	comp += _offset;
+	o_lerpUnclamped = comp / lineLength;
+	o_lerp = clamp(o_lerpUnclamped, 0.0f, 1.0f);
+	vec3 linePos = (comp < 0.0f) ? _lineStart : ((comp > lineLength) ? _lineEnd : (_lineStart + (dir * comp)));
+
+	return linePos;
+}
+vec3 closestPointOnLine3D(vec3 _lineStart, vec3 _lineEnd, vec3 _pos, out float o_lerp, out float o_lerpUnclamped)
+{
+	return closestPointOnLine3D(_lineStart, _lineEnd, _pos, 0.0f, o_lerp, o_lerpUnclamped);
+}
+
+float distToLine3D(vec3 _lineStart, vec3 _lineEnd, vec3 _pos, out float o_lerp, out float o_lerpUnclamped)
+{
+	vec3 linePos = closestPointOnLine3D(_lineStart, _lineEnd, _pos, o_lerp, o_lerpUnclamped);
+	return length(_pos - linePos);
+}
+
+vec4 run(vec2 uv, vec4 tex)
+{
+    vec4 rounded = run_internal(uv, tex);
+
+    /*
+    float lum = dot(tex.rgb, vec3(0.333, 0.333, 0.333));
+    float alpha = clamp(lum * 20.0, 0.0, 1.0);
+    rounded.a *= alpha;
+    */
+
+    /*
+    {
+        vec3 chromaKey = vec3(0.0, 0.0, 0.0);
+        float threshold = 0.5 / 255.0;
+        vec3 backgroundColor = vec3(0.1, 0.1, 0.1);
+
+        float colorDist = length(rounded.rgb - chromaKey);
+        if (colorDist < threshold)
+        {
+            // This pixel is fully chromaKey
+            rounded.rgb = backgroundColor;
+            rounded.a = 0.0f;
+        }
+        else
+        {
+            vec2 pixelUVSize = vec2(1.0 / windowExpandedSize.x, 1.0 / windowExpandedSize.y);
+            vec4 sampleNX = texture2D(sampler, uv + vec2(-pixelUVSize.x, 0.0));
+            vec4 samplePX = texture2D(sampler, uv + vec2(pixelUVSize.x, 0.0));
+            vec4 sampleNY = texture2D(sampler, uv + vec2(0.0, -pixelUVSize.y));
+            vec4 samplePY = texture2D(sampler, uv + vec2(0.0, pixelUVSize.y));
+            float colorDistNX = length(sampleNX.rgb - chromaKey);
+            float colorDistPX = length(samplePX.rgb - chromaKey);
+            float colorDistNY = length(sampleNY.rgb - chromaKey);
+            float colorDistPY = length(samplePY.rgb - chromaKey);
+
+            // Are there any full chromaKey pixels around this one?
+            //if ((colorDistNX < threshold) || (colorDistPX < threshold) || (colorDistNY < threshold) || (colorDistPY < threshold))
+            {
+                vec3 furthestColor = rounded.rgb;
+                float furthestColorDist = colorDist;
+                if (colorDistNX > furthestColorDist)
+                {
+                    furthestColor = sampleNX.rgb;
+                    furthestColorDist = colorDistNX;
+                }
+                if (colorDistPX > furthestColorDist)
+                {
+                    furthestColor = samplePX.rgb;
+                    furthestColorDist = colorDistPX;
+                }
+                if (colorDistNY > furthestColorDist)
+                {
+                    furthestColor = sampleNY.rgb;
+                    furthestColorDist = colorDistNY;
+                }
+                if (colorDistPY > furthestColorDist)
+                {
+                    furthestColor = samplePY.rgb;
+                    furthestColorDist = colorDistPY;
+                }
+
+                float alpha = clamp(colorDist / furthestColorDist, 0.0, 1.0);
+                rounded.rgb = mix(furthestColor, rounded.rgb, alpha);
+                //float alpha = clamp(colorDist / 1.2, 0.0, 1.0);
+                //rounded.rgb *= 1.0 / max(alpha, 0.01);
+
+                rounded.a *= alpha;
+            }
+        }
+    }
+    */
+
+    //
+    {
+        vec3 windowBackgroundDark = vec3(20.0 / 255.0, 22.0 / 255.0, 24.0 / 255.0);         // Darkest part of window
+        vec3 windowBackgroundBright = vec3(32.0 / 255.0, 35.0 / 255.0, 38.0 / 255.0);       // Used for buttons and alternate window parts
+        vec3 windowBackgroundBrightest = vec3(41.0 / 255.0, 44.0 / 255.0, 48.0 / 255.0);    // Used for active header
+
+        vec3 chromaKey = vec3(0.0);//windowBackgroundDark;
+        vec3 chromaKeyMax = windowBackgroundBrightest;
+        // Average of windowBackgroundDark and windowBackgroundBright
+        //vec3 chromaKey = vec3(26.0 / 255.0, 28.5 / 255.0, 31.0 / 255.0);
+
+        //float chromaKeyRadius = 10.0 / 255.0;
+        //float falloff = 0.2;
+        //float chromaKeyRadius = 2.0 / 255.0;
+        //float falloff = 0.05;//0.2;
+        float chromaKeyRadius = 0.0 / 255.0;
+        float falloff = 0.6;
+
+        float alphaMin = 0.6;
+        float alphaMax = 1.0;
+
+        //vec3 colorDelta = tex.rgb - chromaKey;
+        //float colorDist = length(colorDelta);
+        //colorDelta = tex.rgb - chromaKeyMax;
+        //colorDist = min(colorDist, length(colorDelta));
+        //
+        float lerp;
+        float lerpUnclamped;
+        float colorDist = distToLine3D(chromaKey, chromaKeyMax, tex.rgb, lerp, lerpUnclamped);
+
+        colorDist = max(0.0, colorDist - chromaKeyRadius);
+
+        float alpha = clamp(colorDist / falloff, 0.0, 1.0);
+        //alpha = smoothstep(0.0, 1.0, alpha);
+
+        alpha = mix(alphaMin, alphaMax, alpha);
+        // Premultiplied alpha, so multiply all components.
+        rounded *= alpha;
+
+        // Debug display alpha
+        //rounded.rgb = vec3(alpha);
+        //rounded.a = 1.0f;
+    }
+    //
+
+    // TODO: Version of above but sample alpha for kernel around current pixel. Then do screen of current pixel value with blurred value.
+    // Screen being 1.0 - ((1.0 - a) * (1.0 - b)).
+    // Idea is to softly expand out higher alpha value over lower alpha values.
+
+    /*
+    {
+        //vec3 chromaKey = vec3(0.0, 0.0, 0.0);
+        //vec3 chromaKey = vec3(20.0 / 255.0, 22.0 / 255.0, 24.0 / 255.0);
+        vec3 chromaKey = vec3(41.0 / 255.0, 44.0 / 255.0, 48.0 / 255.0);
+
+        // Settings
+        // Solid extra pixel around foreground
+        //int kernelHalfSize = 4;
+        //float solidDist = 1.0;
+        //float curvePower = 2.0;
+        //float alphaMin = 0.65;
+        //float alphaMax = 1.0;
+        // Solid extra pixel with minimal fade
+        //int kernelHalfSize = 2;
+        //float solidDist = 1.0;
+        //float curvePower = 2.0;
+        //float alphaMin = 0.65;
+        //float alphaMax = 1.0;
+        // Minimal border. Looks good but slight aliasing as there's no solid area.
+        int kernelHalfSize = 4;
+        float solidDist = 0.0;
+        float curvePower = 4.0;
+        float alphaMin = 0.65;
+        float alphaMax = 1.0;
+        // Solid area behind foreground
+        //int kernelHalfSize = 16;
+        //float solidDist = 12.0;
+        //float curvePower = 2.0;
+        //float alphaMin = 0.65;
+        //float alphaMax = 1.0;
+        //
+        //int kernelHalfSize = 16;
+        //float solidDist = 1.0;
+        //float curvePower = 4.0;
+        //float alphaMin = 0.65;
+        //float alphaMax = 1.0;
+
+        float thresholdSqr = (0.5 / 255.0) * (0.5 / 255.0);
+
+        vec2 pixelUVSize = vec2(1.0 / windowExpandedSize.x, 1.0 / windowExpandedSize.y);
+
+        float minDistSqr = 999999.0;
+        for (int y = -kernelHalfSize; y <= kernelHalfSize; y++)
+        {
+            for (int x = -kernelHalfSize; x <= kernelHalfSize; x++)
+            {
+                //int x = 0;
+                //int y = 0;
+
+                vec4 sampleColor = texture2D(sampler, uv + vec2(float(x) * pixelUVSize.x, float(y) * pixelUVSize.y));
+                vec3 colorDelta = sampleColor.rgb - chromaKey;
+                float colorDistSqr = dot(colorDelta, colorDelta);
+                if (colorDistSqr > thresholdSqr)
+                {
+                    // Not background
+                    vec2 delta = vec2(float(x), float(y));
+                    float distSqr = dot(delta, delta);
+                    minDistSqr = min(minDistSqr, distSqr);
+                }
+            }
+        }
+
+        float minDist = sqrt(minDistSqr);
+
+        minDist = max(0.0, minDist - solidDist);
+
+        float alpha = clamp(1.0 - (minDist / (float(kernelHalfSize + 1) - solidDist)), 0.0, 1.0);
+        alpha = pow(alpha, curvePower);
+        alpha = mix(alphaMin, alphaMax, alpha);
+
+        // Premultiplied alpha, so multiply all components.
+        rounded *= alpha;
+    }
+    */
+
+    return rounded;
 }
